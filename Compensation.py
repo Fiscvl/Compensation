@@ -1,11 +1,11 @@
 from datetime import *
 from dateutil.relativedelta import *
-from Constants import *
+from BaseProjections.Constants import *
 import pandas as pd
 
 class CCompensation():
 
-    def __init__(self, inputs, filenames, employees, journal_entry, formats):
+    def __init__(self, inputs, filenames, employees, journal_entry, formats, rev_expense_log):
 
         people, comp, comp_accounts, cap_accounts, excel_file = filenames
 
@@ -26,12 +26,25 @@ class CCompensation():
         self.Employee_dict = {}
         self.employee_df = pd.DataFrame()
         self.capsw_df = pd.DataFrame()
+        self.inputs = inputs
 
         self.capSW_dict = {}
         self.employee_capSW_dict = {}
         self.contractors_capSW_dict = {}
-
+        self.transaction_log_employees = []
+        self.transaction_log_contractors = []
+        self.transaction_log = []
         self.journal_entry = journal_entry
+        self.rev_explog_employees = False
+        self.rev_explog_contractors = False
+
+        if people == kEmplPeople:
+            self.rev_explog_employees = rev_expense_log
+        elif people == kContPeople:
+            self.rev_explog_contractors = rev_expense_log
+        else:
+            Print("Error in data sent to Comp module: ", people)
+            return
 
         #default CR account
         self.CR_acct = inputs.cash_account
@@ -73,23 +86,23 @@ class CCompensation():
             print("Can't find or one or more compensation file(s) ")
 
 
-        if people == kCompPeople :
+        if people == kEmplPeople :
 
             self.capSW_dict[people] = self.employee_df
             self.capSW_dict[people+kCapSWCompString] = self.capsw_df
             self.capSW_dict[kCapSWTotals] = self.capsw_df.sum(axis = 0)
             self.write_CompSW(kCapSWComp, inputs)
 
-        elif people == kCompCont:
-            self.capSW_dict[kCompCont] = self.employee_df
-            self.capSW_dict[kCompCont+kCapSWCompString] = self.capsw_df
+        elif people == kContPeople:
+            self.capSW_dict[people] = self.employee_df
+            self.capSW_dict[people+kCapSWCompString] = self.capsw_df
             self.capSW_dict[kCapSWTotals] = self.capsw_df.sum(axis = 0)
             self.write_CompSW(kCapSWCont, inputs)
 
         else:
             print("Error, compensation type of workers not defined")
 
-    def CCompensationAddMonthsTransactions(self, month, TB, CapSW_CR):
+    def CCompensationAddMonthsTransactions(self, month, TB, CapSW_CR, people):
 
         Expense_index = []
         self.totalmonthexpenses = 0
@@ -118,6 +131,24 @@ class CCompensation():
 
                 self.journal_entry.performJE(month, TB, DR_acct, CR_acct, amount)
 
+                #print ("Testing logging: ", self.rev_explog_employees, self.rev_explog_contractors, people)
+                if (self.rev_explog_employees or self.rev_explog_contractors):
+                    log_date = self.inputs.get_date(month)
+                    log_list = [log_date, DR_acct, CR_acct, amount]
+                    self.transaction_log.append(log_list)
+
+                    #if people == kEmplPeople:
+                        #self.transaction_log_employees.append(log_list)
+                        #print("Employee")
+                    #elif people == kContPeople:
+                        #self.transaction_log_contractors.append(log_list)
+                        #print("Contractor")
+                    #else:
+                        #print("Error in data sent to Comp module: ", people)
+                        #return
+
+        #print(self.transaction_log_employees)
+        #print(self.transaction_log_contractors)
         return TB
 
     def getIndexes(self, Comp):
@@ -147,9 +178,9 @@ class CEmployee_expenses():
         self.employee_expenses= {}
         self.employee_comp_list = []
         
-        self.empl_num = employee_info[kEmplNumIndex]
-        self.dept = employee_info[kEmplDeptIndex]
-        self.name = employee_info[kEmplNameIndex]
+        self.empl_num = employee_info[kCompNumIndex]
+        self.dept = employee_info[kCompDeptIndex]
+        self.name = employee_info[kCompNameIndex]
         
         zero_expenses = [0 for i in range(dates.model_term)]
         total_comp = zero_expenses.copy()
@@ -159,65 +190,68 @@ class CEmployee_expenses():
             # self.Comp MUST be run before any of the taxes are run (as they are dependent upon the result)
             # CapSW must be run last, as it is the accumulation of all employee expenses
 
-            if comp_row[kCompTypeTypeIndex] == "Compensation":
+            #these s/b all changed to constants
+            # !!!!!!!!!!!!
+
+            if comp_row[kCompTypeIndex] == "Compensation":
                 temp_result = self.Employee_Comp(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
 
-            elif comp_row[kCompTypeTypeIndex] == "Bonus":
+            elif comp_row[kCompTypeIndex] == "Bonus":
                 temp_result = self.Bonus(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "Vacation":
+            elif comp_row[kCompTypeIndex] == "Vacation":
                 temp_result  = self.Vacation(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp =list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "FICA":
+            elif comp_row[kCompTypeIndex] == "FICA":
                 temp_result  = self.FICA(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "Medicare":
+            elif comp_row[kCompTypeIndex] == "Medicare":
                 temp_result  = self.Medicare(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "FUTA":
+            elif comp_row[kCompTypeIndex] == "FUTA":
                 temp_result  = self.FUTA(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "SUI":
+            elif comp_row[kCompTypeIndex] == "SUI":
                 temp_result  = self.SUI(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "Health":
+            elif comp_row[kCompTypeIndex] == "Health":
                 temp_result  = self.Health(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "WC":
+            elif comp_row[kCompTypeIndex] == "WC":
                 temp_result  = self.WC(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "EmplSetup":
+            elif comp_row[kCompTypeIndex] == "EmplSetup":
                 temp_result  = self.EmplSetup(employee_info, zero_expenses, inputs)
-                self.employee_expenses[comp_row[kCompTypeTypeIndex]] = temp_result
+                self.employee_expenses[comp_row[kCompTypeIndex]] = temp_result
                 total_comp = list(map(sum, zip(total_comp, temp_result)))
                 
-            elif comp_row[kCompTypeTypeIndex] == "CapSW":
+            elif comp_row[kCompTypeIndex] == "CapSW":
                 pass
 
-            elif comp_row[kCompTypeTypeIndex] == "CapSWAmort":
+            elif comp_row[kCompTypeIndex] == "CapSWAmort":
                 pass
             else:
-                print(f"Invalid Comp Type: {comp_row[kCompTypeTypeIndex]}")
+                print(f"Invalid Comp Type: {comp_row[kCompTypeIndex]}")
            
-        cap_sw_comp = [round(i * employee_info[kEmplCapSWIndex],2) for i in total_comp]
+        cap_sw_comp = [round(i * employee_info[kCompCapSWIndex],2) for i in total_comp]
         self.total_employee_comp = total_comp
         self.cap_sw_comp = cap_sw_comp
 
@@ -228,9 +262,9 @@ class CEmployee_expenses():
         # sb list comprehension
         for i,item in enumerate(zero_expenses):
             
-            if (i >= int(employee_info[kEmplBeginIndex])-1) and (i <= int(employee_info[kEmplEndIndex])):
+            if (i >= int(employee_info[kCompBeginIndex])-1) and (i <= int(employee_info[kCompEndIndex])):
                 
-                self.comp_expenses[i] = round(float(employee_info[kEmplMonthlyIndex]),2)
+                self.comp_expenses[i] = round(float(employee_info[kCompMonthlyIndex]),2)
 
         return self.comp_expenses
 
@@ -243,14 +277,14 @@ class CEmployee_expenses():
         self.CapSWComp = zero_expenses.copy()
         self.CapSW_months_amort = {}
         
-        amount = round(float(employee_info[kEmplMonthlyIndex]) * float(employee_info[kEmplCapSWIndex]),2)
+        amount = round(float(employee_info[kCompMonthlyIndex]) * float(employee_info[kCompCapSWIndex]),2)
         amort_months = inputs.amort_comp_term
         amort = round(amount/amort_months,2)
         proj_start = inputs.projections_start
         proj_duration = inputs.months_total
-        comp_start = int(employee_info[kEmplBeginIndex])
-        comp_end = int(employee_info[kEmplEndIndex])
-        comp_name = employee_info[kEmplNameIndex]
+        comp_start = int(employee_info[kCompBeginIndex])
+        comp_end = int(employee_info[kCompEndIndex])
+        comp_name = employee_info[kCompNameIndex]
 
         if comp_start < proj_start:
             comp_start = proj_start        
@@ -318,7 +352,7 @@ class CEmployee_expenses():
         self.Healthcare_expenses = zero_expenses.copy()
         i = 0
         for i,item in enumerate(zero_expenses):
-            if (i >= int(employee_info[kEmplBeginIndex])-1) and (i <= int(employee_info[kEmplEndIndex])):
+            if (i >= int(employee_info[kCompBeginIndex])-1) and (i <= int(employee_info[kCompEndIndex])):
                 self.Healthcare_expenses[i] = float(employee_info[11])
             i +=1
 

@@ -2,12 +2,12 @@ from datetime import *
 from dateutil.relativedelta import *
 
 import pandas as pd
-from Constants import *
+from BaseProjections.Constants import *
 from operator import add
 
 class  CCapExSW():
 
-    def __init__(self, inputs, journal_entry, formats, employee_instance, contractor_instance):
+    def __init__(self, inputs, journal_entry, formats, employee_instance, contractor_instance, rev_expense_log):
 
 
         self.journal_entry = journal_entry
@@ -15,36 +15,26 @@ class  CCapExSW():
         self.account_pairs = {}
         close_TB = []
         close_TB_index = []
+        self.transaction_log = []
         self.journal_entry = journal_entry
-
-        start = inputs.projections_start
-        end = inputs.months_total
+        self.capSWAccts_df = inputs.CapExAcs_df
+        self.rev_explog = rev_expense_log
+        self.transaction_log = []
         
-        excel_book = (inputs.full_path_input  + kTB_file)
-        close_month_TB = inputs.projections_date.strftime("%Y-%m") 
-
-        #get the last closed month TB to see if any CapExSW balances need to be amortized
-
-        excel_book = (inputs.full_path_input + kcapSWAccts_file)
-        self.capSWAccts_df = pd.read_excel(excel_book, kCapExSW)
-
         try:
-            df = self.capSWAccts_df.copy()
-            close_TB = df.values.tolist()
+            #get the last closed month TB to see if any CapExSW balances need to be amortized
+            excel_book = (inputs.full_path_input  + kTB_file)
+            close_month_TB = inputs.projections_date.strftime("%Y-%m")
+            TB_df = pd.read_excel(excel_book, close_month_TB)
+            close_TB = TB_df.values.tolist()
 
             if len(close_TB) > 0:
                 for row in close_TB:
-                   close_TB_index.append(row[kTBAcIndex])
+                    # create index
+                    close_TB_index.append(row[kTBAcIndex])
                    
         except:
-            print("Couldn't find or open the TB's Excel File. Close TB process halted", excel_book)
-
-        try:
-            excel = (inputs.full_path_input + kCapExSW)
-            self.cap_ex_df = pd.read_excel(excel, kCapExSW)
-
-        except:
-            print("Coundn't find CapEx File")
+            print("Couldn't find or open the TB's Excel File", excel_book)
 
         for i, row in self.capSWAccts_df.iterrows():
             cap_ex_sw_transactions = inputs.zero_row.copy()
@@ -71,11 +61,17 @@ class  CCapExSW():
                     print("Didn't find contra: ", contra_ac)
 
                 if continue_row:
-                    monthly = round((asset-contra)/row[kCapExInitialIndex],2)
-                    #needs to be replaced with a list comprehension to fill the
-                    month_start = inputs.months_actuals
-                    for month in range(inputs.months_projections):
-                        cap_ex_sw_transactions[month + month_start] = monthly 
+                    
+                    start = inputs.projections_start
+                    end = inputs.months_total
+                    term = row[kCapExInitialIndex]
+                    actuals = inputs.months_actuals
+                    monthly = round((asset-contra)/term,2)
+
+                    for i in range(actuals, end):
+
+                        if (i >= actuals) and (i < actuals + term):   
+                            cap_ex_sw_transactions[i] = monthly                         
                     
                     self.month_transactions[row[kCapExDebit]] = cap_ex_sw_transactions
                 
@@ -86,7 +82,6 @@ class  CCapExSW():
                 #fill the either the end of the term or the end of the projections, whichever comes first into the transaction vector
 
                 # Here's the employees and contractors section for projected comp
-
         self.employee_capSW = employee_instance.capSW_dict[kCapSWTotals]
         self.contractor_capSW = contractor_instance.capSW_dict[kCapSWTotals]
         total_SW_comp = list(map(add, self.employee_capSW, self.contractor_capSW))
@@ -118,24 +113,11 @@ class  CCapExSW():
         #           - the closing TB
         # Need to get the number of net CapSW accounts - zero vectors
         # Need to create a dic for each of the above vectors with asset ac as the key
-        
-
-        # Here is where I am; need to read all balances - asset and contra, determine net unamortized balance and then
-        # amortize them over the standard estimated reaming life (an input)
-
-        #print(f"Here's the self.month_transactions {self.month_transactions}")
-        #print(f"Here's the self.account_pairs {self.account_pairs}")
-            
-        #except:
-            #print("Can't open the CapExSW Excel file")
-
-        #print("Got here in CapEx Class!")
-
-        #self.comp_capsw = self.get_cap_sw_arrays(inputs, formats, compensation_instance)
-        #self.constractors_capsw = self.get_cap_sw_arrays(inputs, formats, contractor_instance)
 
     def CCapExSWAddMonthsTransactions(self, month, current_TB, inputs):
 
+
+        #print("Got called")
 
         #Each projection month, take the "self.month_transactions" Dictionary
         #Loop thru each expense.  If the Expense has a 'Accumulated' account with an entry in the Dictionary
@@ -152,20 +134,32 @@ class  CCapExSW():
         # not sure we need this anymore
 
         # This is for amortizing the initial balances 
+
+        #print("capSWAccts_df: ", self.capSWAccts_df)
+
         for i, row in self.capSWAccts_df.iterrows():
 
             sub_type = row[kCapExSubTypeIndex]
-              
-            if row[kCapExSubTypeIndex] == kCapSWExpType:
 
-                DR = row[kCapExDebitIndex]
-                CR = row[kCapExCreditIndex]
+            #print("sub_type: ", sub_type)
+            
+            if sub_type == kCapSWExpType:
+
+                DR_acct = row[kCapExDebitIndex]
+                CR_acct = row[kCapExCreditIndex]
+                #print("Here's the DR & CR accounts: ", DR, CR)
                 accumulated = row[kCapExAccumulatedIndex]
 
                 if accumulated in self.month_transactions:
                     amount = self.month_transactions[accumulated][month]
+                    #print("Amount: ", amount)
                     if amount != 0:
-                        current_TB = self.journal_entry.performJE(month, current_TB, DR, CR, amount)
+                        current_TB = self.journal_entry.performJE(month, current_TB, DR_acct, CR_acct, amount)
+
+                        if self.rev_explog:
+                            log_date =inputs.get_date(month)
+                            log_list = [log_date, DR_acct, CR_acct, amount]
+                            self.transaction_log.append(log_list)
 
                 else:
                     print("Capitalized item has a zero balance, no amortization required: ",accumulated)
@@ -194,10 +188,14 @@ class  CCapExSW():
                 amount = round(self.amort_expense_CapSW[month],2)
                 DR_acct = row[kcapSWCompDebitIndex]
                 CR_acct = row[kcapSWCompCreditIndex]
-
                 self.journal_entry.performJE(month, current_TB, DR_acct, CR_acct, amount)
 
             else:
                 print("Error in SW Accounts table, type unknown")
+
+            if self.rev_explog:
+                log_date =inputs.get_date(month)
+                log_list = [log_date, DR_acct, CR_acct, amount]
+                self.transaction_log.append(log_list)
 
         return current_TB
